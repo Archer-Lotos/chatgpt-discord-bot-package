@@ -1,0 +1,180 @@
+{
+  "package": {
+    "name": "@deep-foundation/chatgpt-discord-bot",
+    "version": "0.0.3"
+  },
+  "data": [
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "SyncTextFile"
+      },
+      "id": 1
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "Port"
+      },
+      "id": 2
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "Type"
+      },
+      "id": 3
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "Value"
+      },
+      "id": 4
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "String"
+      },
+      "id": 5
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "Any"
+      },
+      "id": 6
+    },
+    {
+      "package": {
+        "dependencyId": 1,
+        "containValue": "Message"
+      },
+      "id": 7
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "Handler"
+      },
+      "id": 8
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "dockerSupportsJs"
+      },
+      "id": 9
+    },
+    {
+      "package": {
+        "dependencyId": 0,
+        "containValue": "HandleInsert"
+      },
+      "id": 10
+    },
+    {
+      "package": {
+        "dependencyId": 1,
+        "containValue": "Reply"
+      },
+      "id": 11
+    },
+    {
+      "id": "BotReplyToServer",
+      "type": 1,
+      "value": {
+        "value": "async ({ deep, require, data: { newLink, triggeredByLinkId } }) => {\n  const conversationTypeLinkId = await deep.id(\"@deep-foundation/chatgpt\", \"Conversation\");\n  const messageTypeLinkId = await deep.id(\"@deep-foundation/messaging\", \"Message\");\n  const authorTypeLinkId = await deep.id(\"@deep-foundation/messaging\", \"Author\");\n  const replyTypeLinkId = await deep.id(\"@deep-foundation/messaging\", \"Reply\");\n  const chatGPTTypeLinkId = await deep.id(\"@deep-foundation/chatgpt\", \"ChatGPT\");\n  const messagingTreeId = await deep.id(\"@deep-foundation/messaging\", 'MessagingTree');\n  const messageIdTypeId = await deep.id(\"@deep-foundation/chatgpt-discord-bot\", \"MessageId\");\n\n  const { data } = await deep.select({\n    tree_id: { _eq: messagingTreeId },\n    parent: { type_id: { _in: [conversationTypeLinkId, messageTypeLinkId] } },\n    link: { id: { _eq: newLink.from_id } },\n  }, {\n    table: 'tree',\n    variables: { order_by: { depth: \"desc\" } },\n    returning: `\n    id\n    depth\n    root_id\n    parent_id\n    link_id\n    parent {\n      id\n      from_id\n      type_id\n      to_id\n      value\n      reply: out (where: { type_id: { _eq: ${replyTypeLinkId}} }) {\n        id\n        from_id\n        type_id\n        to_id\n        to {\n          id\n          from_id\n          type_id\n          to_id\n          messageId: out (where: { type_id: { _eq: ${messageIdTypeId}} }) {\n            id\n            from_id\n            type_id\n            to_id\n            string {\n              value\n            }\n          }\n        }\n      }\n      author: out (where: { type_id: { _eq: ${authorTypeLinkId}} }) { \n        id\n        from_id\n        type_id\n        to_id\n      }\n    }`\n  })\n\n  const lastMessage = data[0].parent;\n  const author = lastMessage?.author?.[0]?.to_id\n\n  if (author !== chatGPTTypeLinkId) {\n    return {author, chatGPTTypeLinkId};\n  }\n\n  const conversationLink = data.filter(mp => mp.parent.type_id == conversationTypeLinkId)[0].parent;\n\n  const loadBotToken = async () => {\n    const containTreeId = await deep.id('@deep-foundation/core', 'containTree');\n    const tokenTypeId = await deep.id('@deep-foundation/chatgpt-discord-bot', 'BotToken');\n    const { data: [{ value: { value: npmToken = undefined } = {} } = {}] = [] } = await deep.select({\n      up: {\n        tree_id: { _eq: containTreeId },\n        parent: { id: { _eq: triggeredByLinkId } },\n        link: { type_id: { _eq: tokenTypeId } }\n      }\n    });\n    return npmToken;\n  };\n\n  const BOT_TOKEN = await loadBotToken();\n  const Discord = require(\"discord.js\");\n\n  const client = new Discord.Client({\n    intents: [Discord.GatewayIntentBits.Guilds, Discord.GatewayIntentBits.GuildMessages],\n  });\n\n  const replyText = lastMessage.value.value;\n  const sourceMessageId = lastMessage.reply[0].to.messageId[0].string.value;\n  const channelId = conversationLink.value.value;\n\n  const splitMessage = (message) => {\n    const maxSymbols = 1990;\n    let messages = [];\n    let currentMessage = '';\n    let currentLanguage = '';\n    let inCodeBlock = false;\n    const lines = message.split('\\n');\n    for (let line of lines) {\n      const isCodeBlockLine = line.startsWith('```');\n      if (isCodeBlockLine) {\n        currentLanguage = line.slice(3);\n        inCodeBlock = !inCodeBlock;\n      }\n      const potentialMessage = currentMessage + (currentMessage.length > 0 ? '\\n' : '') + line;\n      if (potentialMessage.length > maxSymbols) {\n        if (inCodeBlock) {\n          currentMessage += '\\n```';\n        }\n        messages.push(currentMessage);\n        if (inCodeBlock) {\n          currentMessage = '```' + currentLanguage + '\\n' + line;\n        } else {\n          currentMessage = line;\n        }\n      } else {\n        currentMessage = potentialMessage;\n      }\n    }\n    if (currentMessage.length > 0) {\n      messages.push(currentMessage);\n    }\n    return messages;\n  }\n\n  const replies = splitMessage(replyText);\n  \n  const sendMessagePromise = new Promise((resolve, reject) => {\n    client.on('ready', async () => {\n      client.channels.fetch(channelId)\n        .then(async (channel) => {\n          for (let content of replies) {\n            await channel.send({ content, reply: { messageReference: '' + sourceMessageId, failIfNotExists: false } });\n          }\n          setTimeout(async () => { await client.destroy(); resolve({\"status\": \"messages sent\", messages: replies, sourceMessageId, channelId, guildId: channel.guild.id }); }, 1000)\n        });\n    });\n    client.login(BOT_TOKEN);\n  });\n  return await sendMessagePromise;\n}"
+      }
+    },
+    {
+      "id": "port",
+      "type": 2,
+      "value": {
+        "value": 5555
+      }
+    },
+    {
+      "id": "BotDockerImage",
+      "type": 3
+    },
+    {
+      "id": "docker-image",
+      "type": "BotDockerImage",
+      "value": {
+        "value": "deepf/chatgpt-discord-listener:main"
+      }
+    },
+    {
+      "id": "image-name",
+      "type": 4,
+      "from": "BotDockerImage",
+      "to": 5
+    },
+    {
+      "id": "BotToken",
+      "type": 3
+    },
+    {
+      "id": "bot-token",
+      "type": 4,
+      "from": "BotToken",
+      "to": 5
+    },
+    {
+      "id": "ActivateBot",
+      "type": 3,
+      "from": 6,
+      "to": 6
+    },
+    {
+      "id": "MessageId",
+      "type": 3,
+      "from": 7,
+      "to": 7
+    },
+    {
+      "id": "BotReplyHandler",
+      "type": 8,
+      "from": 9,
+      "to": "BotReplyToServer"
+    },
+    {
+      "id": "HandleReply",
+      "type": 10,
+      "from": 11,
+      "to": "BotReplyHandler"
+    },
+    {
+      "id": "BotListen",
+      "type": 1,
+      "value": {
+        "value": "async ({ deep, require, data: { oldLink, newLink, triggeredByLinkId } }) => {\n  const conversationTypeLinkId = await deep.id(\"@deep-foundation/chatgpt\", \"Conversation\");\n  const messageTypeLinkId = await deep.id(\"@deep-foundation/messaging\", \"Message\");\n  const authorTypeLinkId = await deep.id(\"@deep-foundation/messaging\", \"Author\");\n  const containTypeLinkId = await deep.id(\"@deep-foundation/core\", \"Contain\");\n  const replyTypeLinkId = await deep.id(\"@deep-foundation/messaging\", 'Reply');\n  const messagingTreeId = await deep.id(\"@deep-foundation/messaging\", 'MessagingTree');\n  const userLinkId = await deep.id(\"deep\", \"admin\");\n\n  const loadBotToken = async () => {\n    const containTreeId = await deep.id('@deep-foundation/core', 'containTree');\n    const tokenTypeId = await deep.id('@deep-foundation/chatgpt-discord-bot', 'BotToken');\n    const { data: [{ value: { value: npmToken = undefined } = {} } = {}] = [] } = await deep.select({\n      up: {\n        tree_id: { _eq: containTreeId },\n        parent: { id: { _eq: triggeredByLinkId } },\n        link: { type_id: { _eq: tokenTypeId } }\n      }\n    });\n    return npmToken;\n  };\n\n  const Discord = require(\"discord.js\");\n  const BOT_TOKEN = await loadBotToken();\n\n  const discordClient = new Discord.Client({\n    intents: [\n      Discord.GatewayIntentBits.DirectMessages,\n      Discord.GatewayIntentBits.Guilds,\n      Discord.GatewayIntentBits.GuildMessages,\n      Discord.GatewayIntentBits.MessageContent,\n    ],\n  });\n\n  const botListenPromise = new Promise((resolve, reject) => {\n    discordClient.on('ready', () => {\n      console.log(`Logged in as ${discordClient.user.tag}!`);\n    });\n\n    process.on('unhandledRejection', async (error) => {\n      console.error('Unhandled promise rejection:', JSON.stringify(error, null, 2));\n      await discordClient.destroy();\n      reject({ unhandledRejection: error });\n    });\n\n    discordClient.on('exit', (event) => {\n      console.log(`Discord bot is exited`, event);\n      resolve({ exited: event });\n    });\n\n    discordClient.on('disconnected', (event) => {\n      console.log(`Discord bot is disconnected.`, event);\n      resolve({ disconnected: event });\n    });\n\n    discordClient.on(Discord.Events.MessageCreate, async (message) => {\n      const mentionPrefix = `<@${discordClient.user.id}>`;\n      if (message.content.includes(mentionPrefix) && !message.author.bot) {\n        const channelName = \"\" + message.channel.id;\n        let messageContent;\n\n        if (message.reference) {\n          console.log(\"replyToMessageId:\" + message.reference.messageID);\n          const replyToMessage = await message.fetchReference();\n          console.log(\"reply text:\" + replyToMessage.content);\n          messageContent = `# quoted\n          ${replyToMessage.content} \n          # message\n          ${message.content}`;\n        } else messageContent = message.content;\n\n        const messageLink = {\n          string: { data: { value: messageContent } },\n          type_id: messageTypeLinkId,\n          in: {\n            data: [{\n              type_id: containTypeLinkId,\n              from_id: userLinkId,\n            }]\n          }\n        };\n\n        const { data: [{ id: messageLinkId }] } = await deep.insert(messageLink);\n\n        await deep.insert({\n          type_id: await deep.id(\"@deep-foundation/chatgpt-discord-bot\", \"MessageId\"),\n          from_id: messageLinkId,\n          to_id: messageLinkId,\n          string: {\n            data: { value: '' + message.id }\n          }\n        });\n        const { data } = await deep.select({\n          type_id: conversationTypeLinkId,\n          string: { value: { _eq: channelName } }\n        });\n\n        const conversationLinkId = data?.[0]?.id\n\n        if (conversationLinkId > 0) {\n          const result = await deep.select({\n            tree_id: { _eq: messagingTreeId },\n            link: { type_id: { _eq: messageTypeLinkId } },\n            root_id: { _eq: conversationLinkId },\n            self: { _eq: true }\n          }, {\n            table: 'tree',\n            variables: { order_by: { depth: \"desc\" } },\n            returning: `\n                id\n                depth\n                root_id\n                parent_id\n                link_id\n                link {\n                  id\n                  from_id\n                  type_id\n                  to_id\n                  value\n                  author: out (where: { type_id: { _eq: ${authorTypeLinkId}} }) { \n                    id\n                    from_id\n                    type_id\n                    to_id\n                  }\n                }`\n          })\n\n          const lastMessageId = result?.data?.[0]?.link?.id || conversationLinkId;\n\n          await deep.insert({\n            type_id: replyTypeLinkId,\n            from_id: messageLinkId,\n            to_id: lastMessageId,\n            in: {\n              data: [{\n                type_id: containTypeLinkId,\n                from_id: userLinkId,\n              }]\n            }\n          });\n        } else {\n          await deep.insert({\n            string: { data: { value: channelName } },\n            type_id: conversationTypeLinkId,\n            in: {\n              data: [{\n                type_id: containTypeLinkId,\n                from_id: userLinkId,\n              },\n              {\n                type_id: replyTypeLinkId,\n                from_id: messageLinkId,\n                in: {\n                  data: [{\n                    type_id: containTypeLinkId,\n                    from_id: userLinkId,\n                  }]\n                }\n              }]\n            }\n          });\n        }\n      }\n    });\n    discordClient.login(BOT_TOKEN);\n  });\n  return await botListenPromise;\n}"
+      }
+    },
+    {
+      "id": "BotListenHandler",
+      "type": 8,
+      "from": 9,
+      "to": "BotListen"
+    },
+    {
+      "id": "HandleListen",
+      "type": 10,
+      "from": "ActivateBot",
+      "to": "BotListenHandler"
+    }
+  ],
+  "errors": [],
+  "dependencies": [
+    {
+      "name": "@deep-foundation/core",
+      "version": "0.0.2"
+    },
+    {
+      "name": "@deep-foundation/messaging",
+      "version": "1.0.1"
+    }
+  ]
+}
